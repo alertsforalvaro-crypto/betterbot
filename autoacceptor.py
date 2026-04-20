@@ -18,6 +18,11 @@ CHECK_INTERVAL     = 15   # seconds between refreshes (site enforces 15s minimum
 TARGET_KEYWORDS = [
     "middle school",
     "middle",
+    "resource",
+    "rsp",
+    "high",
+    "middle",
+    "7-8",
     "high school",
     "junior high",
     "grade 7",
@@ -28,6 +33,8 @@ TARGET_KEYWORDS = [
     "8th grade",
     "ms ",       # common abbreviation e.g. "TENAYA MS"
     " ms",
+    " hs",
+    "hs "
     "jr high",
 ]
 MIN_HOURS = 4.0   # minimum shift duration in hours
