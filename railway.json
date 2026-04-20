@@ -3,6 +3,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python check.py"
+    "startCommand": "python autoacceptor.py"
   }
 }
