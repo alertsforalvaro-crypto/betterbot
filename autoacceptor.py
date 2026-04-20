@@ -121,20 +121,17 @@ def check_and_accept_jobs():
         page    = context.new_page()
 
         # ── 1. LOGIN ──────────────────────────────────────────────────────────
+
         log("🔐 Logging in…")
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
-        # The login page uses input[type=text] for username and input[type=password] for pin
-        page.locator("input[type='text']").first.fill(USERNAME)
-        page.locator("input[type='password']").first.fill(PASSWORD)
-        page.locator("button[type='submit'], input[type='submit']").first.click()
-
-        # Wait until we land on the job search dashboard
+        page.goto(LOGIN_URL)
+        
+        page.fill("#userId", USERNAME)
+        page.fill("#userPin", PASSWORD)
+        page.click("#submitBtn")
+        
         try:
-            page.wait_for_selector(
-                "text=Available Jobs, text=Job Search, #available-tab, .tab",
-                timeout=60_000
-            )
+            page.wait_for_selector("#available-tab", timeout=60000)
         except PlaywrightTimeoutError:
             log("❌ Login timed out — check credentials or site availability.")
             browser.close()
