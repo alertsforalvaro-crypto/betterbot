@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError
 
 USERNAME = os.getenv("SMARTFIND_USERNAME")
@@ -31,63 +30,90 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 
-# --- SAFE TEXT ---
+# --- SAFE TEXT HELPER ---
 def safe_text(locator):
     try:
         if locator.count() > 0:
             return locator.first.inner_text().strip()
     except:
         pass
-    return ""
+    return None
 
 
-# --- HOURS PARSER ---
-def parse_hours(time_str):
+def get_available_jobs(page):
+    """Extract job info safely (never breaks)."""
+
+    jobs = []
+
     try:
-        cleaned = time_str.replace("–", "-").replace("—", "-")
-        parts = [p.strip() for p in cleaned.replace("-", " ").split() if p.strip()]
+        rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
+        count = rows.count()
 
-        time_tokens = [p for p in parts if ":" in p]
-        ampm_tokens = [p for p in parts if p.upper() in ("AM", "PM")]
+        for i in range(count):
 
-        if len(time_tokens) >= 2 and len(ampm_tokens) >= 2:
-            t1 = f"{time_tokens[0]} {ampm_tokens[0]}"
-            t2 = f"{time_tokens[1]} {ampm_tokens[1]}"
+            try:
+                row = rows.nth(i)
 
-            fmt = "%I:%M %p"
-            start = datetime.strptime(t1, fmt)
-            end = datetime.strptime(t2, fmt)
+                # --- CLICK EXPAND ---
+                try:
+                    expand_btn = row.locator("pds-icon[name*='caret-right']")
+                    if expand_btn.count() > 0:
+                        expand_btn.click()
+                        page.wait_for_timeout(400)
+                except:
+                    pass
 
-            diff = (end - start).total_seconds() / 3600
-            return diff if diff > 0 else diff + 24
-    except:
-        pass
+                # --- BASIC INFO ---
+                date = safe_text(row.locator("td[id*='startendDate']"))
+                time_text = safe_text(row.locator("td[id*='startendtime']"))
 
-    return 0.0
+                # --- EXPANDED PANEL ---
+                expanded = page.locator(f"#mobile-row-expanded-{i}")
+
+                school = safe_text(
+                    expanded.locator("pds-icon[name='school']").locator("xpath=..")
+                )
+
+                instructions = safe_text(
+                    expanded.locator(".text")
+                )
+
+                jobs.append({
+                    "date": date,
+                    "time": time_text,
+                    "location": school,
+                    "instructions": instructions
+                })
+
+            except Exception as e:
+                print(f"Job {i} failed:", e)
+                continue
+
+    except Exception as e:
+        print("Job scraping error:", e)
+
+    return jobs
 
 
-# --- MATCH CRITERIA ---
-TARGET_KEYWORDS = [
-    "middle school", "middle", "resource", "rsp", "high",
-    "7-8", "high school", "junior high", "grade 7", "grade 8",
-    "grades 7", "grades 8", "7th grade", "8th grade",
-    " ms", "ms ", " hs", "hs "
-]
+def send_job_details(jobs):
 
-MIN_HOURS = 4.0
+    for job in jobs:
 
+        message = "🚨 SMARTFIND JOB ALERT\n"
 
-def matches_criteria(classification, location, time_str):
-    combined = f"{classification} {location}".lower()
+        if job.get("location"):
+            message += f"\n🏫 School: {job['location']}"
 
-    if not any(kw in combined for kw in TARGET_KEYWORDS):
-        return False
+        if job.get("date"):
+            message += f"\n📅 Date: {job['date']}"
 
-    hours = parse_hours(time_str)
-    if hours < MIN_HOURS:
-        return False
+        if job.get("time"):
+            message += f"\n⏰ Time: {job['time']}"
 
-    return True
+        if job.get("instructions"):
+            message += f"\n📝 Notes: {job['instructions']}"
+
+        send_telegram(message)
 
 
 def check_for_jobs():
@@ -110,95 +136,94 @@ def check_for_jobs():
         page.click("#available-tab")
         page.wait_for_selector("#available-panel.pds-is-active", timeout=60000)
 
-        print("✅ Logged in. Starting refresh loop...\n")
+        print("📋 Waiting for jobs state...")
 
-        # --- REFRESH LOOP ---
-        while True:
+        try:
+            page.wait_for_function(
+                """
+                () => {
+                    const hasRows = document.querySelectorAll(
+                        "tbody.mobile-table-body tr[id^='mobile-row-']"
+                    ).length > 0;
 
-            try:
-                page.reload()
-                page.wait_for_timeout(2000)
+                    const noJobs = document.querySelector('#available-panel .pds-message-info')
+                        ?.innerText
+                        ?.toLowerCase()
+                        .includes('no jobs');
 
-                rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
-                row_count = rows.count()
+                    return hasRows || noJobs;
+                }
+                """,
+                timeout=60000
+            )
+        except TimeoutError:
+            print("Timed out waiting for jobs state.")
+            browser.close()
+            return
 
-                no_jobs = page.locator("#available-panel .pds-message-info")
+        # --- REAL DETECTION ---
+        rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
+        row_count = rows.count()
 
-                # --- STATE: JOBS AVAILABLE ---
-                if row_count > 0:
+        if row_count == 0:
+            print("❌ No job rows detected (avoiding false alert).")
+            browser.close()
+            return
 
-                    print(f"✅ Jobs available: {row_count}")
+        try:
+            first_row_text = rows.nth(0).inner_text().strip()
+            if not first_row_text:
+                print("⚠️ Rows detected but empty — skipping alert.")
+                browser.close()
+                return
+        except:
+            pass
 
-                    send_telegram("🚨 Jobs available on SmartFind!")
+        print(f"✅ Jobs detected: {row_count}")
 
-                    # --- AUTO ACCEPT ---
-                    for i in range(row_count):
+        send_telegram("🚨 Jobs available on SmartFind!")
 
-                        try:
-                            row = rows.nth(i)
+        # ============================
+        # ✅ AUTO ACCEPT ADDED HERE
+        # ============================
+        try:
+            for i in range(row_count):
+                row = rows.nth(i)
 
-                            # expand
-                            try:
-                                caret = row.locator("pds-icon[name*='caret']")
-                                if caret.count() > 0:
-                                    caret.first.click()
-                                    page.wait_for_timeout(300)
-                            except:
-                                pass
+                # click accept button (multiple selectors for safety)
+                accept_btn = row.locator("button:has-text('Accept'), [id*='accept']")
+                if accept_btn.count() > 0:
+                    accept_btn.first.click()
+                    page.wait_for_timeout(1000)
 
-                            time_text = safe_text(
-                                row.locator("td[id*='startendtime']")
-                            )
+                    # handle confirmation popup
+                    confirm_btn = page.locator("#confirm-dialog")
+                    if confirm_btn.count() > 0:
+                        confirm_btn.first.click()
+                        page.wait_for_timeout(1000)
 
-                            classification = safe_text(
-                                row.locator("td[id*='classification']")
-                            )
+                    print(f"✅ Accepted job {i+1}")
 
-                            location = safe_text(
-                                row.locator("td[id*='location']")
-                            )
+        except Exception as e:
+            print("Auto-accept failed:", e)
 
-                            expanded = page.locator(f"#mobile-row-expanded-{i}")
-                            if expanded.count() > 0:
-                                extra = expanded.inner_text()
-                                classification += " " + extra
-                                location += " " + extra
+        # ============================
 
-                            if not matches_criteria(classification, location, time_text):
-                                continue
+        try:
+            page.wait_for_timeout(1500)
 
-                            # click accept
-                            for sel in [
-                                f"tr[id='mobile-row-{i}'] [id*='accept']",
-                                f"tr[id='mobile-row-{i}'] button"
-                            ]:
-                                btn = page.locator(sel)
-                                if btn.count() > 0:
-                                    btn.first.click()
-                                    page.wait_for_timeout(1500)
-                                    break
+            jobs = get_available_jobs(page)
 
-                        except Exception as e:
-                            print("Auto-accept error:", e)
+            if jobs:
+                send_job_details(jobs)
 
-                # --- STATE: NO JOBS ---
-                elif no_jobs.count() > 0 and \
-                        "no jobs" in no_jobs.first.inner_text().lower():
+        except Exception as e:
+            print("Detail extraction failed:", e)
 
-                    print("😴 No jobs available")
-
-                # --- STATE: RATE LIMITED / EMPTY ---
-                else:
-                    print("⚠️ Nothing loaded (rate limited or empty state)")
-
-            except Exception as e:
-                print("Loop error:", e)
-
-            print("⏳ Refreshing in 5 seconds...\n")
-            time.sleep(5)
+        browser.close()
 
 
-print("🚀 SmartFind Bot Started")
+print("🚀 SmartFind Railway Bot Started")
 
 while True:
 
@@ -208,5 +233,6 @@ while True:
     except Exception as e:
         print("Unexpected error:", e)
 
-    print("🔁 Restarting browser...\n")
-    time.sleep(10)
+    print("⏳ Sleeping 20 seconds...\n")
+
+    time.sleep(20)
