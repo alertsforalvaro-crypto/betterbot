@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError
 
 USERNAME = os.getenv("SMARTFIND_USERNAME")
@@ -30,135 +31,63 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 
-# --- SAFE TEXT HELPER ---
+# --- SAFE TEXT ---
 def safe_text(locator):
     try:
         if locator.count() > 0:
             return locator.first.inner_text().strip()
     except:
         pass
-    return None
+    return ""
 
 
-def get_available_jobs(page):
-    """Extract job info safely (never breaks)."""
-
-    jobs = []
-
+# --- HOURS PARSER ---
+def parse_hours(time_str):
     try:
-        rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
-        count = rows.count()
+        cleaned = time_str.replace("–", "-").replace("—", "-")
+        parts = [p.strip() for p in cleaned.replace("-", " ").split() if p.strip()]
 
-        for i in range(count):
+        time_tokens = [p for p in parts if ":" in p]
+        ampm_tokens = [p for p in parts if p.upper() in ("AM", "PM")]
 
-            try:
-                row = rows.nth(i)
+        if len(time_tokens) >= 2 and len(ampm_tokens) >= 2:
+            t1 = f"{time_tokens[0]} {ampm_tokens[0]}"
+            t2 = f"{time_tokens[1]} {ampm_tokens[1]}"
 
-                # --- CLICK EXPAND ---
-                try:
-                    expand_btn = row.locator("pds-icon[name*='caret-right']")
-                    if expand_btn.count() > 0:
-                        expand_btn.click()
-                        page.wait_for_timeout(400)
-                except:
-                    pass
+            fmt = "%I:%M %p"
+            start = datetime.strptime(t1, fmt)
+            end = datetime.strptime(t2, fmt)
 
-                # --- BASIC INFO ---
-                date = safe_text(row.locator("td[id*='startendDate']"))
-                time_text = safe_text(row.locator("td[id*='startendtime']"))
+            diff = (end - start).total_seconds() / 3600
+            return diff if diff > 0 else diff + 24
+    except:
+        pass
 
-                # --- EXPANDED PANEL ---
-                expanded = page.locator(f"#mobile-row-expanded-{i}")
-
-                school = safe_text(
-                    expanded.locator("pds-icon[name='school']").locator("xpath=..")
-                )
-
-                instructions = safe_text(
-                    expanded.locator(".text")
-                )
-
-                jobs.append({
-                    "date": date,
-                    "time": time_text,
-                    "location": school,
-                    "instructions": instructions
-                })
-
-            except Exception as e:
-                print(f"Job {i} failed:", e)
-                continue
-
-    except Exception as e:
-        print("Job scraping error:", e)
-
-    return jobs
+    return 0.0
 
 
-# --- AUTO ACCEPT FUNCTION (ADDED) ---
-def auto_accept_jobs(page):
-    rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
-    count = rows.count()
+# --- MATCH CRITERIA ---
+TARGET_KEYWORDS = [
+    "middle school", "middle", "resource", "rsp", "high",
+    "7-8", "high school", "junior high", "grade 7", "grade 8",
+    "grades 7", "grades 8", "7th grade", "8th grade",
+    " ms", "ms ", " hs", "hs "
+]
 
-    for i in range(count):
+MIN_HOURS = 4.0
 
-        try:
-            row = rows.nth(i)
 
-            # Expand row
-            try:
-                caret = row.locator("pds-icon[name*='caret']")
-                if caret.count() > 0:
-                    caret.first.click()
-                    page.wait_for_timeout(500)
-            except:
-                pass
+def matches_criteria(classification, location, time_str):
+    combined = f"{classification} {location}".lower()
 
-            accepted = False
+    if not any(kw in combined for kw in TARGET_KEYWORDS):
+        return False
 
-            for selector in [
-                f"tr[id='mobile-row-{i}'] [id*='accept']",
-                f"tr[id='mobile-row-{i}'] button:has-text('Accept')",
-                f"tr[id='mobile-row-{i}'] td:last-child button",
-                f"[id*='accept'][id*='{i}']",
-            ]:
-                try:
-                    btn = page.locator(selector)
+    hours = parse_hours(time_str)
+    if hours < MIN_HOURS:
+        return False
 
-                    if btn.count() > 0:
-                        btn.first.click()
-                        page.wait_for_timeout(2000)
-
-                        # Confirm popup
-                        for confirm_sel in [
-                            "button:has-text('Confirm')",
-                            "button:has-text('Yes')",
-                            "button:has-text('OK')",
-                            ".modal button",
-                        ]:
-                            try:
-                                confirm = page.locator(confirm_sel)
-                                if confirm.count() > 0:
-                                    confirm.first.click()
-                                    page.wait_for_timeout(1500)
-                                    break
-                            except:
-                                continue
-
-                        accepted = True
-                        print(f"✅ Accepted job {i+1}")
-                        break
-
-                except Exception as e:
-                    print(f"Accept attempt failed: {e}")
-                    continue
-
-            if not accepted:
-                print(f"⚠️ Could not accept job {i+1}")
-
-        except Exception as e:
-            print(f"Job loop error {i}: {e}")
-            continue
+    return True
 
 
 def check_for_jobs():
@@ -181,72 +110,95 @@ def check_for_jobs():
         page.click("#available-tab")
         page.wait_for_selector("#available-panel.pds-is-active", timeout=60000)
 
-        print("📋 Waiting for jobs state...")
+        print("✅ Logged in. Starting refresh loop...\n")
 
-        try:
-            page.wait_for_function(
-                """
-                () => {
-                    const hasRows = document.querySelectorAll(
-                        "tbody.mobile-table-body tr[id^='mobile-row-']"
-                    ).length > 0;
+        # --- REFRESH LOOP ---
+        while True:
 
-                    const noJobs = document.querySelector('#available-panel .pds-message-info')
-                        ?.innerText
-                        ?.toLowerCase()
-                        .includes('no jobs');
+            try:
+                page.reload()
+                page.wait_for_timeout(2000)
 
-                    return hasRows || noJobs;
-                }
-                """,
-                timeout=60000
-            )
-        except TimeoutError:
-            print("Timed out waiting for jobs state.")
-            browser.close()
-            return
+                rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
+                row_count = rows.count()
 
-        # --- REAL DETECTION ---
-        rows = page.locator("tbody.mobile-table-body tr[id^='mobile-row-']")
-        row_count = rows.count()
+                no_jobs = page.locator("#available-panel .pds-message-info")
 
-        if row_count == 0:
-            print("❌ No job rows detected (avoiding false alert).")
-            browser.close()
-            return
+                # --- STATE: JOBS AVAILABLE ---
+                if row_count > 0:
 
-        # Optional extra safety
-        try:
-            first_row_text = rows.nth(0).inner_text().strip()
-            if not first_row_text:
-                print("⚠️ Rows detected but empty — skipping alert.")
-                browser.close()
-                return
-        except:
-            pass
+                    print(f"✅ Jobs available: {row_count}")
 
-        print(f"✅ Jobs detected: {row_count}")
+                    send_telegram("🚨 Jobs available on SmartFind!")
 
-        # ALERT ONLY
-        send_telegram("🚨 Jobs available on SmartFind!")
+                    # --- AUTO ACCEPT ---
+                    for i in range(row_count):
 
-        # --- AUTO ACCEPT (ADDED) ---
-        try:
-            auto_accept_jobs(page)
-        except Exception as e:
-            print("Auto accept failed:", e)
+                        try:
+                            row = rows.nth(i)
 
-        # keep existing behavior (no messages sent)
-        try:
-            page.wait_for_timeout(1500)
-            get_available_jobs(page)
-        except Exception as e:
-            print("Detail extraction failed:", e)
+                            # expand
+                            try:
+                                caret = row.locator("pds-icon[name*='caret']")
+                                if caret.count() > 0:
+                                    caret.first.click()
+                                    page.wait_for_timeout(300)
+                            except:
+                                pass
 
-        browser.close()
+                            time_text = safe_text(
+                                row.locator("td[id*='startendtime']")
+                            )
+
+                            classification = safe_text(
+                                row.locator("td[id*='classification']")
+                            )
+
+                            location = safe_text(
+                                row.locator("td[id*='location']")
+                            )
+
+                            expanded = page.locator(f"#mobile-row-expanded-{i}")
+                            if expanded.count() > 0:
+                                extra = expanded.inner_text()
+                                classification += " " + extra
+                                location += " " + extra
+
+                            if not matches_criteria(classification, location, time_text):
+                                continue
+
+                            # click accept
+                            for sel in [
+                                f"tr[id='mobile-row-{i}'] [id*='accept']",
+                                f"tr[id='mobile-row-{i}'] button"
+                            ]:
+                                btn = page.locator(sel)
+                                if btn.count() > 0:
+                                    btn.first.click()
+                                    page.wait_for_timeout(1500)
+                                    break
+
+                        except Exception as e:
+                            print("Auto-accept error:", e)
+
+                # --- STATE: NO JOBS ---
+                elif no_jobs.count() > 0 and \
+                        "no jobs" in no_jobs.first.inner_text().lower():
+
+                    print("😴 No jobs available")
+
+                # --- STATE: RATE LIMITED / EMPTY ---
+                else:
+                    print("⚠️ Nothing loaded (rate limited or empty state)")
+
+            except Exception as e:
+                print("Loop error:", e)
+
+            print("⏳ Refreshing in 5 seconds...\n")
+            time.sleep(5)
 
 
-print("🚀 SmartFind Railway Bot Started")
+print("🚀 SmartFind Bot Started")
 
 while True:
 
@@ -256,6 +208,5 @@ while True:
     except Exception as e:
         print("Unexpected error:", e)
 
-    print("⏳ Sleeping 20 seconds...\n")
-
-    time.sleep(20)
+    print("🔁 Restarting browser...\n")
+    time.sleep(10)
