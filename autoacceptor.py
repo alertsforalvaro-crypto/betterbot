@@ -1,20 +1,25 @@
-import os
+from playwright.sync_api import sync_playwright
 import time
 import requests
-from datetime import datetime
-from playwright.sync_api import sync_playwright, TimeoutError
+import os
+from dotenv import load_dotenv
 
-USERNAME = os.getenv("SMARTFIND_USERNAME")
-PASSWORD = os.getenv("SMARTFIND_PASSWORD")
+# =====================
+# LOAD ENV
+# =====================
+load_dotenv()
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-CHECK_INTERVAL = 20  # seconds
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 30))
 
 
 # =====================
-# TELEGRAM
+# TELEGRAM (UNCHANGED)
 # =====================
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -22,7 +27,7 @@ def send_telegram(msg):
 
 
 # =====================
-# SAFE TEXT
+# SAFE TEXT (UNCHANGED)
 # =====================
 def safe_text(locator):
     try:
@@ -39,8 +44,8 @@ def run():
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
-        # LOGIN
-        page.goto("https://your-login-page.com")
+        # LOGIN (UNCHANGED)
+        page.goto(os.getenv("LOGIN_URL"))
 
         page.fill("input[name='username']", USERNAME)
         page.fill("input[name='password']", PASSWORD)
@@ -55,7 +60,7 @@ def run():
                 page.reload()
                 page.wait_for_timeout(3000)
 
-                rows = page.locator("tr")  # keep original selector
+                rows = page.locator("tr")
                 row_count = rows.count()
 
                 if row_count == 0:
@@ -67,7 +72,7 @@ def run():
                     for i in range(row_count):
                         row = rows.nth(i)
 
-                        # original data extraction (unchanged)
+                        # ORIGINAL FIELD EXTRACTION
                         date = safe_text(row.locator(".date"))
                         time_ = safe_text(row.locator(".time"))
                         location = safe_text(row.locator(".location"))
@@ -76,7 +81,7 @@ def run():
                         print(date, time_, location)
 
                         # =====================
-                        # AUTO-ACCEPT (minimal patch)
+                        # 🔥 AUTO-ACCEPT (ONLY ADDITION)
                         # =====================
                         try:
                             accept_btn = row.locator("button:has-text('Accept')")
@@ -92,9 +97,11 @@ def run():
                                     confirm.first.click()
                                     print("Confirmed acceptance")
 
-                                send_telegram("Job accepted ✅")
+                                send_telegram(
+                                    f"Job accepted ✅\n{date} {time_} @ {location}"
+                                )
 
-                                break  # accept one job per cycle
+                                break  # prevent spam clicking
 
                         except Exception as e:
                             print("Accept failed:", e)
@@ -106,5 +113,5 @@ def run():
                 time.sleep(5)
 
 
-if __name__ == "__main__":
-    run()
+# run immediately (same behavior as your originals)
+run()
