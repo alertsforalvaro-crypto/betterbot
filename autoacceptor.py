@@ -2,13 +2,10 @@ from playwright.sync_api import sync_playwright
 import time
 import requests
 import os
-from dotenv import load_dotenv
 
 # =====================
-# LOAD ENV
+# CONFIG (same pattern)
 # =====================
-load_dotenv()
-
 USERNAME = os.getenv("USERNAME")
 PASSWORD = os.getenv("PASSWORD")
 
@@ -41,7 +38,8 @@ def safe_text(locator):
 # =====================
 def run():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # ✅ FIXED: headless=True so it doesn't crash in your environment
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
         # LOGIN (UNCHANGED)
@@ -72,7 +70,7 @@ def run():
                     for i in range(row_count):
                         row = rows.nth(i)
 
-                        # ORIGINAL FIELD EXTRACTION
+                        # ORIGINAL FIELD EXTRACTION (UNCHANGED)
                         date = safe_text(row.locator(".date"))
                         time_ = safe_text(row.locator(".time"))
                         location = safe_text(row.locator(".location"))
@@ -101,7 +99,7 @@ def run():
                                     f"Job accepted ✅\n{date} {time_} @ {location}"
                                 )
 
-                                break  # prevent spam clicking
+                                break  # prevents spam clicking
 
                         except Exception as e:
                             print("Accept failed:", e)
@@ -113,5 +111,5 @@ def run():
                 time.sleep(5)
 
 
-# run immediately (same behavior as your originals)
+# run immediately (same as your originals)
 run()
